@@ -57,12 +57,12 @@ once you're confident.
 
 ## Environment variables
 
-| Variable         | Required | Default   | Description                            |
-| ---------------- | -------- | --------- | -------------------------------------- |
-| `LOGIN_EMAIL`    | yes      | -         | Account email                          |
-| `LOGIN_PASSWORD` | yes      | -         | Account password                       |
-| `LICENSE_PLATE`  | no       | `CJ73789` | Plate to register                      |
-| `HEADLESS`       | no       | `0`       | `1` to hide the browser window         |
+| Variable         | Required | Default | Description                            |
+| ---------------- | -------- | ------- | -------------------------------------- |
+| `LOGIN_EMAIL`    | yes      | -       | Account email                          |
+| `LOGIN_PASSWORD` | yes      | -       | Account password                       |
+| `LICENSE_PLATE`  | yes      | -       | Plate to register                      |
+| `HEADLESS`       | no       | `0`     | `1` to hide the browser window         |
 
 ## Scheduling
 
@@ -75,7 +75,7 @@ handles this automatically. To use it, push the repo and add these in
 | -------- | ---------------- | ---------------------- |
 | Secret   | `LOGIN_EMAIL`    | your account email     |
 | Secret   | `LOGIN_PASSWORD` | your account password  |
-| Variable | `LICENSE_PLATE`  | plate (optional)       |
+| Variable | `LICENSE_PLATE`  | plate to register      |
 
 For local-only use on Windows, Task Scheduler works too: run
 `python C:\path\to\parking.py` daily with the working directory set

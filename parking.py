@@ -38,7 +38,6 @@ from playwright.sync_api import (
 
 START_URL = "https://www.dsb.dk/dsb-plus/fri-parkering/"
 PERMIT_HOST = "parkcare.parkzone.dk"
-DEFAULT_PLATE = "CJ73789"
 SUCCESS_MARKER = "digital p-tilladelse"
 
 
@@ -145,10 +144,12 @@ def register_parking(email: str, password: str, plate: str, headless: bool) -> i
 def main() -> int:
     email = require_env("LOGIN_EMAIL")
     password = require_env("LOGIN_PASSWORD")
-    plate = os.environ.get("LICENSE_PLATE", DEFAULT_PLATE).strip().upper()
+    plate = require_env("LICENSE_PLATE").strip().upper()
     headless = os.environ.get("HEADLESS", "0") == "1"
 
-    print(f"[*] LOGIN_EMAIL    = {email}")
+    # Avoid printing the raw email to public Actions logs.
+    masked = email.split("@", 1)[0][:2] + "***@" + email.split("@", 1)[-1]
+    print(f"[*] LOGIN_EMAIL    = {masked}")
     print(f"[*] LICENSE_PLATE  = {plate}")
     print(f"[*] HEADLESS       = {headless}")
 
