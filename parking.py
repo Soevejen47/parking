@@ -116,7 +116,7 @@ def register_parking(email: str, password: str, plate: str, headless: bool) -> i
             portal.locator("#TBRegNo").fill(plate)
             portal.locator("#Email").fill(email)
             portal.locator("#BCreate").click()
-            print(f"[*] Submitted plate {plate}.")
+            print("[*] Submitted plate.")
 
             # 8) Read and print the response message (span #LMessage).
             message_locator = portal.locator("#LMessage")
@@ -147,11 +147,8 @@ def main() -> int:
     plate = require_env("LICENSE_PLATE").strip().upper()
     headless = os.environ.get("HEADLESS", "0") == "1"
 
-    # Avoid printing the raw email to public Actions logs.
-    masked = email.split("@", 1)[0][:2] + "***@" + email.split("@", 1)[-1]
-    print(f"[*] LOGIN_EMAIL    = {masked}")
-    print(f"[*] LICENSE_PLATE  = {plate}")
-    print(f"[*] HEADLESS       = {headless}")
+    # Avoid printing identifying values to public Actions logs.
+    print(f"[*] HEADLESS = {headless}")
 
     return register_parking(email, password, plate, headless)
 

@@ -71,11 +71,11 @@ morning. A GitHub Actions workflow at `.github/workflows/daily-parking.yml`
 handles this automatically. To use it, push the repo and add these in
 **Settings -> Secrets and variables -> Actions**:
 
-| Type     | Name             | Value                  |
-| -------- | ---------------- | ---------------------- |
-| Secret   | `LOGIN_EMAIL`    | your account email     |
-| Secret   | `LOGIN_PASSWORD` | your account password  |
-| Variable | `LICENSE_PLATE`  | plate to register      |
+| Type   | Name             | Value                  |
+| ------ | ---------------- | ---------------------- |
+| Secret | `LOGIN_EMAIL`    | your account email     |
+| Secret | `LOGIN_PASSWORD` | your account password  |
+| Secret | `LICENSE_PLATE`  | plate to register      |
 
 For local-only use on Windows, Task Scheduler works too: run
 `python C:\path\to\parking.py` daily with the working directory set
