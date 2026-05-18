@@ -15,8 +15,8 @@ ParkZone link, fills in your license plate + email, and submits.
 5. Fills in the license plate + email on ParkCare and clicks `Opret`.
 6. Prints the confirmation message returned by ParkCare.
 
-If anything goes wrong, full-page screenshots of both tabs are saved to
-`screenshots/` so you can see exactly what the script saw.
+If anything goes wrong, the error is printed to stderr -- check the
+GitHub Actions log (or your terminal when running locally).
 
 ## Requirements
 
@@ -72,8 +72,6 @@ project folder so `.env` is picked up. On Linux / macOS, use cron.
 ## Safety notes
 
 - Never commit your real `.env` -- it is already in `.gitignore`.
-- `screenshots/` may capture the page mid-flow (including your email).
-  It is also gitignored.
 - If you rotate your DSB password, just update `.env`.
 
 ## Files
@@ -81,4 +79,4 @@ project folder so `.env` is picked up. On Linux / macOS, use cron.
 - `dsb_parking.py` -- the script
 - `requirements.txt` -- Python deps (`playwright`, `python-dotenv`)
 - `.env.example` -- template for your secrets
-- `.gitignore` -- excludes `.env`, `screenshots/`, virtualenvs, caches
+- `.gitignore` -- excludes `.env`, virtualenvs, caches

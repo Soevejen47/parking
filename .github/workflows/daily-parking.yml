@@ -46,12 +46,3 @@ jobs:
 
       - name: Register parking
         run: python dsb_parking.py
-
-      - name: Upload failure screenshots
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: failure-screenshots
-          path: screenshots/
-          if-no-files-found: ignore
-          retention-days: 7

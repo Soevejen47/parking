@@ -3,9 +3,6 @@
 .env.local
 .env.*.local
 
-# Failure screenshots (may contain personal info such as email)
-screenshots/
-
 # Python
 __pycache__/
 *.py[cod]

@@ -15,17 +15,16 @@ This script walks the same flow you would do by hand:
 
 Selectors used in this script were verified against the live site, so they
 should be stable enough for everyday use. If DSB ever changes them, the
-script will fail loudly and save a screenshot you can inspect.
+script prints the error and exits non-zero so the GitHub Actions log
+makes it obvious.
 
-See SETUP.md / the README block below for install + run instructions.
+See the README for install + run instructions.
 """
 
 from __future__ import annotations
 
-import datetime
 import os
 import sys
-from pathlib import Path
 
 # python-dotenv is optional. If it is installed and a .env file is present
 # next to this script, the variables in it are loaded into os.environ.
@@ -37,7 +36,6 @@ except ImportError:
     pass
 
 from playwright.sync_api import (
-    Page,
     TimeoutError as PlaywrightTimeoutError,
     sync_playwright,
 )
@@ -48,24 +46,8 @@ from playwright.sync_api import (
 DSB_URL = "https://www.dsb.dk/dsb-plus/fri-parkering/"
 DEFAULT_PLATE = "CJ73789"
 
-# Folder where failure screenshots are written.
-SCREENSHOT_DIR = Path(__file__).resolve().parent / "screenshots"
-
 
 # --- helpers -----------------------------------------------------------------
-
-def save_failure_screenshot(page: Page, label: str) -> None:
-    """Save a full-page screenshot so a human can see what went wrong."""
-    try:
-        SCREENSHOT_DIR.mkdir(exist_ok=True)
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = SCREENSHOT_DIR / f"failure_{label}_{ts}.png"
-        page.screenshot(path=str(path), full_page=True)
-        print(f"[!] Screenshot saved: {path}")
-    except Exception as e:
-        # Never let screenshot errors hide the real exception.
-        print(f"[!] Could not save screenshot ({e})")
-
 
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
@@ -162,12 +144,6 @@ def register_parking(email: str, password: str, plate: str, headless: bool) -> i
             return 0 if "digital p-tilladelse" in message.lower() else 1
 
         except Exception as exc:
-            # Try to screenshot both the DSB tab and the ParkCare tab
-            # (if it was opened) for debugging.
-            save_failure_screenshot(page, "dsb")
-            for other in context.pages:
-                if other is not page:
-                    save_failure_screenshot(other, "parkcare")
             print(f"[!] Flow failed: {exc!r}", file=sys.stderr)
             return 1
 
