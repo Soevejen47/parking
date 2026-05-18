@@ -22,7 +22,7 @@ jobs:
     env:
       LOGIN_EMAIL: ${{ secrets.LOGIN_EMAIL }}
       LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
-      LICENSE_PLATE: ${{ secrets.LICENSE_PLATE }}
+      REGISTRATIONS: ${{ secrets.REGISTRATIONS }}
       HEADLESS: "1"
 
     steps:

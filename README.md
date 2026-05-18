@@ -57,12 +57,24 @@ once you're confident.
 
 ## Environment variables
 
-| Variable         | Required | Default | Description                            |
-| ---------------- | -------- | ------- | -------------------------------------- |
-| `LOGIN_EMAIL`    | yes      | -       | Account email                          |
-| `LOGIN_PASSWORD` | yes      | -       | Account password                       |
-| `LICENSE_PLATE`  | yes      | -       | Plate to register                      |
-| `HEADLESS`       | no       | `0`     | `1` to hide the browser window         |
+| Variable         | Required | Default | Description                                          |
+| ---------------- | -------- | ------- | ---------------------------------------------------- |
+| `LOGIN_EMAIL`    | yes      | -       | Account login email                                  |
+| `LOGIN_PASSWORD` | yes      | -       | Account password                                     |
+| `REGISTRATIONS`  | yes      | -       | One or more `PLATE:receipt-email` entries (see below) |
+| `HEADLESS`       | no       | `0`     | `1` to hide the browser window                       |
+| `TIMEOUT_MS`     | no       | `20000` | Per-action Playwright timeout (ms)                   |
+| `MAX_ATTEMPTS`   | no       | `2`     | Retries on transient timeouts                        |
+
+### REGISTRATIONS format
+
+Comma- or newline-separated `PLATE:email` pairs. The email per entry is the
+address the operator sends the receipt to -- it does not have to match the
+login email. Lines starting with `#` are skipped.
+
+```
+REGISTRATIONS=AB12345:owner@example.com,CD67890:friend@example.com
+```
 
 ## Scheduling
 
@@ -71,11 +83,11 @@ morning. A GitHub Actions workflow at `.github/workflows/daily-parking.yml`
 handles this automatically. To use it, push the repo and add these in
 **Settings -> Secrets and variables -> Actions**:
 
-| Type   | Name             | Value                  |
-| ------ | ---------------- | ---------------------- |
-| Secret | `LOGIN_EMAIL`    | your account email     |
-| Secret | `LOGIN_PASSWORD` | your account password  |
-| Secret | `LICENSE_PLATE`  | plate to register      |
+| Type   | Name             | Value                                       |
+| ------ | ---------------- | ------------------------------------------- |
+| Secret | `LOGIN_EMAIL`    | your account email                          |
+| Secret | `LOGIN_PASSWORD` | your account password                       |
+| Secret | `REGISTRATIONS`  | `PLATE:email,PLATE:email,...` (see above)   |
 
 For local-only use on Windows, Task Scheduler works too: run
 `python C:\path\to\parking.py` daily with the working directory set

@@ -1,26 +1,22 @@
 """
-Daily parking registration.
+Daily parking registration -- supports multiple plates per run.
 
-Logs in to the operator's website, follows the daily registration link
-(which opens a third-party permit portal in a new tab), fills in license
-plate + email, and submits the form. Prints the confirmation text.
+Logs in to the operator's site once, opens the daily permit-portal link,
+then submits the portal form once per (plate, receipt-email) entry. A
+single workflow run can therefore register several cars at once.
 
-The daily link is a one-time token that changes every day -- the script
-reads its href off the page, so nothing needs to be hardcoded.
+The daily portal link is a one-time token that changes every day -- the
+script reads its href off the operator page, so nothing is hardcoded.
 
-If the upstream site ever changes its markup, the script prints the
-error to stderr and exits non-zero so the run log makes it obvious.
-
-See the README for install + run instructions.
+Config comes from environment variables. See the README for the list.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import time
 
-# python-dotenv is optional. If it is installed and a .env file is present
-# next to this script, the variables in it are loaded into os.environ.
 try:
     from dotenv import load_dotenv
 
@@ -29,6 +25,7 @@ except ImportError:
     pass
 
 from playwright.sync_api import (
+    Page,
     TimeoutError as PlaywrightTimeoutError,
     sync_playwright,
 )
@@ -38,7 +35,30 @@ from playwright.sync_api import (
 
 START_URL = "https://www.dsb.dk/dsb-plus/fri-parkering/"
 PERMIT_HOST = "parkcare.parkzone.dk"
-SUCCESS_MARKER = "digital p-tilladelse"
+
+# Lowercase substrings -- if any are present in the portal's response, treat
+# the registration as successful. Both fresh and idempotent re-registrations
+# (same plate twice in one day) end up matching.
+SUCCESS_MARKERS: tuple[str, ...] = (
+    "digital p-tilladelse",
+    "allerede registreret",
+)
+
+DEFAULT_TIMEOUT_MS = int(os.environ.get("TIMEOUT_MS", "20000"))
+MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "2"))
+RETRY_DELAY_SECONDS = 30
+
+# How long to poll for the portal's response message to refresh between
+# successive submissions on the same page.
+MESSAGE_POLL_TIMEOUT_S = 15
+MESSAGE_POLL_INTERVAL_S = 0.5
+
+
+# --- exit codes --------------------------------------------------------------
+
+EXIT_OK = 0
+EXIT_FAILURE = 1
+EXIT_CONFIG = 2
 
 
 # --- helpers -----------------------------------------------------------------
@@ -46,95 +66,134 @@ SUCCESS_MARKER = "digital p-tilladelse"
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        print(
-            f"ERROR: environment variable {name} is empty.\n"
-            f"       Set it in a .env file or in your shell session.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+        print(f"ERROR: environment variable {name} is empty.", file=sys.stderr)
+        sys.exit(EXIT_CONFIG)
     return value
+
+
+def parse_registrations(raw: str) -> list[tuple[str, str]]:
+    """Parse "plate1:email1, plate2:email2, ..." into a list of pairs.
+
+    Plates are uppercased and stripped of whitespace; emails are stripped.
+    Lines/entries that are empty or commented with '#' are skipped.
+    """
+    items: list[tuple[str, str]] = []
+    # Support both comma and newline separators -- both feel natural.
+    for chunk in raw.replace("\n", ",").split(","):
+        entry = chunk.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if ":" not in entry:
+            raise ValueError(
+                f"Bad REGISTRATIONS entry {entry!r} -- expected 'PLATE:email'"
+            )
+        plate, email = entry.split(":", 1)
+        plate = plate.strip().upper()
+        email = email.strip()
+        if not plate or not email:
+            raise ValueError(f"Bad REGISTRATIONS entry {entry!r}")
+        items.append((plate, email))
+    if not items:
+        raise ValueError("REGISTRATIONS is empty after parsing")
+    return items
+
+
+def is_success(message: str) -> bool:
+    msg = message.lower()
+    return any(marker in msg for marker in SUCCESS_MARKERS)
+
+
+def current_message(portal: Page) -> str:
+    """Return the current #LMessage text, or '' if not present."""
+    locator = portal.locator("#LMessage")
+    if locator.count() == 0:
+        return ""
+    try:
+        return locator.inner_text().strip()
+    except PlaywrightTimeoutError:
+        return ""
+
+
+def submit_one(portal: Page, plate: str, receipt_email: str) -> str:
+    """Submit one plate/email and return the portal's response message.
+
+    Polls #LMessage until its text differs from the previous submission
+    (or first becomes non-empty). Raises TimeoutError on timeout.
+    """
+    previous = current_message(portal)
+
+    portal.locator("#TBRegNo").fill(plate)
+    portal.locator("#Email").fill(receipt_email)
+    portal.locator("#BCreate").click()
+
+    deadline = time.monotonic() + MESSAGE_POLL_TIMEOUT_S
+    while time.monotonic() < deadline:
+        current = current_message(portal)
+        if current and current != previous:
+            return current
+        time.sleep(MESSAGE_POLL_INTERVAL_S)
+    raise TimeoutError(
+        f"Portal response did not arrive within {MESSAGE_POLL_TIMEOUT_S}s"
+    )
 
 
 # --- main flow ---------------------------------------------------------------
 
-def register_parking(email: str, password: str, plate: str, headless: bool) -> int:
-    """Run the full registration flow. Returns a process exit code."""
+def run_once(
+    login_email: str,
+    password: str,
+    registrations: list[tuple[str, str]],
+    headless: bool,
+) -> list[tuple[str, str, str | None]]:
+    """Log in once, then submit each registration.
 
+    Returns a list of (plate, message, error_string_or_None) tuples,
+    one per registration attempted.
+    """
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=headless)
-        # A fresh context = no cookies from a previous run.
         context = browser.new_context()
+        context.set_default_timeout(DEFAULT_TIMEOUT_MS)
         page = context.new_page()
 
         try:
-            # 1) Open the start page.
-            print(f"[*] Opening start page")
             page.goto(START_URL, wait_until="domcontentloaded")
 
-            # 2) Accept the cookie banner if it shows up.
-            #    Rendered by Cookie Information; uses the CSS class
-            #    .coi-banner__accept on its "Acceptér alle" button.
+            # Cookie banner -- only appears on first visit per context.
             try:
-                page.locator("button.coi-banner__accept").first.click(timeout=5000)
-                print("[*] Cookie banner accepted.")
+                page.locator("button.coi-banner__accept").first.click(timeout=5_000)
             except PlaywrightTimeoutError:
-                print("[*] No cookie banner shown -- continuing.")
+                pass
 
-            # 3) Click the big login / signup CTA.
-            #    Two copies on the page (hero + body); .first is fine.
+            # Sign in.
             page.get_by_role(
                 "link", name="Log ind eller tilmeld dig gratis"
             ).first.click()
-
-            # 4) Fill the login form.
-            page.wait_for_url("**/auth/log-ind**", timeout=15_000)
-            page.locator('input[type="email"]').wait_for(state="visible", timeout=15_000)
-            page.locator('input[type="email"]').fill(email)
+            page.wait_for_url("**/auth/log-ind**")
+            page.locator('input[type="email"]').fill(login_email)
             page.locator('input[type="password"]').fill(password)
             page.locator('button[type="submit"]:has-text("Log ind")').click()
-            print("[*] Login form submitted.")
+            page.wait_for_url("**/dsb-plus/fri-parkering/**")
 
-            # 5) After login the site redirects back to the start page and
-            #    a daily registration link to the permit portal appears.
-            page.wait_for_url("**/dsb-plus/fri-parkering/**", timeout=20_000)
+            # Open the daily portal link in a new tab.
             permit_link = page.locator(f'a[href*="{PERMIT_HOST}"]').first
-            permit_link.wait_for(state="visible", timeout=20_000)
-            print("[*] Logged in. Found daily registration link.")
-
-            # 6) The link has target="_blank" -- it opens a new tab.
-            with context.expect_page(timeout=15_000) as new_page_info:
+            permit_link.wait_for(state="visible")
+            with context.expect_page() as popup_info:
                 permit_link.click()
-            portal = new_page_info.value
+            portal = popup_info.value
             portal.wait_for_load_state("domcontentloaded")
-            print("[*] Permit portal opened.")
+            portal.locator("#TBRegNo").wait_for(state="visible")
 
-            # 7) Fill the portal form.
-            #    #TBRegNo = license plate field
-            #    #Email   = email field
-            #    #BCreate = "Opret" submit button
-            portal.locator("#TBRegNo").wait_for(state="visible", timeout=15_000)
-            portal.locator("#TBRegNo").fill(plate)
-            portal.locator("#Email").fill(email)
-            portal.locator("#BCreate").click()
-            print("[*] Submitted plate.")
-
-            # 8) Read and print the response message (span #LMessage).
-            message_locator = portal.locator("#LMessage")
-            message_locator.wait_for(state="visible", timeout=15_000)
-            message = message_locator.inner_text().strip()
-
-            ok = SUCCESS_MARKER in message.lower()
-            print()
-            print("=" * 72)
-            print("SUCCESS" if ok else "RESULT (unexpected wording -- please verify)")
-            print("=" * 72)
-            print(message)
-            print("=" * 72)
-            return 0 if ok else 1
-
-        except Exception as exc:
-            print(f"[!] Flow failed: {exc!r}", file=sys.stderr)
-            return 1
+            # Submit each registration on the same portal page.
+            results: list[tuple[str, str, str | None]] = []
+            for plate, receipt_email in registrations:
+                try:
+                    message = submit_one(portal, plate, receipt_email)
+                    results.append((plate, message, None))
+                except Exception as exc:
+                    # Keep going -- one failure shouldn't block the rest.
+                    results.append((plate, "", repr(exc)))
+            return results
 
         finally:
             context.close()
@@ -142,15 +201,58 @@ def register_parking(email: str, password: str, plate: str, headless: bool) -> i
 
 
 def main() -> int:
-    email = require_env("LOGIN_EMAIL")
+    login_email = require_env("LOGIN_EMAIL")
     password = require_env("LOGIN_PASSWORD")
-    plate = require_env("LICENSE_PLATE").strip().upper()
+    try:
+        registrations = parse_registrations(require_env("REGISTRATIONS"))
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
     headless = os.environ.get("HEADLESS", "0") == "1"
 
-    # Avoid printing identifying values to public Actions logs.
-    print(f"[*] HEADLESS = {headless}")
+    print(
+        f"[*] {len(registrations)} registration(s) "
+        f"headless={headless} timeout={DEFAULT_TIMEOUT_MS}ms "
+        f"attempts={MAX_ATTEMPTS}"
+    )
 
-    return register_parking(email, password, plate, headless)
+    # Retry the whole batch on transient timeouts during login / portal open.
+    # Per-plate failures inside run_once are returned as result rows and not
+    # retried -- they're typically operator-side issues (bad plate, etc).
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            results = run_once(login_email, password, registrations, headless)
+            break
+        except PlaywrightTimeoutError as exc:
+            print(
+                f"[!] attempt {attempt}/{MAX_ATTEMPTS} timed out: {exc}",
+                file=sys.stderr,
+            )
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(RETRY_DELAY_SECONDS)
+        except Exception as exc:
+            print(f"[!] fatal: {exc!r}", file=sys.stderr)
+            return EXIT_FAILURE
+    else:
+        print(f"[!] all {MAX_ATTEMPTS} attempts timed out", file=sys.stderr)
+        return EXIT_FAILURE
+
+    # Report.
+    all_ok = True
+    print()
+    print("=" * 72)
+    for plate, message, error in results:
+        if error is not None:
+            all_ok = False
+            print(f"[FAIL] {plate}: {error}")
+            continue
+        ok = is_success(message)
+        all_ok = all_ok and ok
+        label = "OK  " if ok else "FAIL"
+        print(f"[{label}] {plate}: {message}")
+    print("=" * 72)
+
+    return EXIT_OK if all_ok else EXIT_FAILURE
 
 
 if __name__ == "__main__":
