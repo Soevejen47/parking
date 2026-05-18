@@ -14,6 +14,7 @@ Config comes from environment variables. See the README for the list.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 
@@ -53,6 +54,10 @@ RETRY_DELAY_SECONDS = 30
 MESSAGE_POLL_TIMEOUT_S = 15
 MESSAGE_POLL_INTERVAL_S = 0.5
 
+# Danish civil plates are 2 letters + 5 digits (e.g. AB12345). Catches
+# typos at config time instead of after a browser launch.
+PLATE_RE = re.compile(r"^[A-Z]{2}\d{5}$")
+
 
 # --- exit codes --------------------------------------------------------------
 
@@ -75,9 +80,13 @@ def parse_registrations(raw: str) -> list[tuple[str, str]]:
     """Parse "plate1:email1, plate2:email2, ..." into a list of pairs.
 
     Plates are uppercased and stripped of whitespace; emails are stripped.
-    Lines/entries that are empty or commented with '#' are skipped.
+    Plates are validated against the Danish 2L+5D format. Duplicate plates
+    are dropped (first occurrence wins) so an accidental copy-paste does
+    not cause a double-submit. Lines/entries that are empty or commented
+    with '#' are skipped.
     """
     items: list[tuple[str, str]] = []
+    seen: set[str] = set()
     # Support both comma and newline separators -- both feel natural.
     for chunk in raw.replace("\n", ",").split(","):
         entry = chunk.strip()
@@ -92,6 +101,15 @@ def parse_registrations(raw: str) -> list[tuple[str, str]]:
         email = email.strip()
         if not plate or not email:
             raise ValueError(f"Bad REGISTRATIONS entry {entry!r}")
+        if not PLATE_RE.match(plate):
+            raise ValueError(
+                f"Bad plate {plate!r} -- expected 2 letters + 5 digits "
+                f"(e.g. AB12345)"
+            )
+        if plate in seen:
+            print(f"[*] Skipping duplicate plate {plate}", file=sys.stderr)
+            continue
+        seen.add(plate)
         items.append((plate, email))
     if not items:
         raise ValueError("REGISTRATIONS is empty after parsing")
@@ -117,10 +135,13 @@ def current_message(portal: Page) -> str:
 def submit_one(portal: Page, plate: str, receipt_email: str) -> str:
     """Submit one plate/email and return the portal's response message.
 
-    Polls #LMessage until its text differs from the previous submission
-    (or first becomes non-empty). Raises TimeoutError on timeout.
+    Clears #LMessage before submitting, then polls until it has text
+    again. Wait-for-non-empty is safe even when consecutive submissions
+    produce identical wording -- diff-polling would hang in that case.
     """
-    previous = current_message(portal)
+    msg_locator = portal.locator("#LMessage")
+    if msg_locator.count() > 0:
+        msg_locator.evaluate("el => { el.textContent = ''; }")
 
     portal.locator("#TBRegNo").fill(plate)
     portal.locator("#Email").fill(receipt_email)
@@ -129,7 +150,7 @@ def submit_one(portal: Page, plate: str, receipt_email: str) -> str:
     deadline = time.monotonic() + MESSAGE_POLL_TIMEOUT_S
     while time.monotonic() < deadline:
         current = current_message(portal)
-        if current and current != previous:
+        if current:
             return current
         time.sleep(MESSAGE_POLL_INTERVAL_S)
     raise TimeoutError(
@@ -239,6 +260,7 @@ def main() -> int:
 
     # Report.
     all_ok = True
+    ok_count = 0
     print()
     print("=" * 72)
     for plate, message, error in results:
@@ -248,9 +270,12 @@ def main() -> int:
             continue
         ok = is_success(message)
         all_ok = all_ok and ok
+        if ok:
+            ok_count += 1
         label = "OK  " if ok else "FAIL"
         print(f"[{label}] {plate}: {message}")
     print("=" * 72)
+    print(f"[*] {ok_count}/{len(results)} OK")
 
     return EXIT_OK if all_ok else EXIT_FAILURE
 
