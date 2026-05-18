@@ -1,9 +1,13 @@
 name: Daily parking
 
 on:
-  # 23:05 UTC = 00:05 Copenhagen (winter) / 01:05 (summer).
-  # Always just past local midnight, when a new daily permit can be claimed.
+  # Two crons to cover DST: 22:05 UTC = 00:05 Copenhagen in summer (CEST),
+  # 23:05 UTC = 00:05 Copenhagen in winter (CET). The "wrong" one runs an
+  # hour before midnight local time and either no-ops (portal still serves
+  # the previous day's permit -> "allerede registreret" path) or registers
+  # early; the script is idempotent either way, so a duplicate run is safe.
   schedule:
+    - cron: "5 22 * * *"
     - cron: "5 23 * * *"
   # Allow manual runs from the Actions tab for testing.
   workflow_dispatch:
@@ -65,4 +69,28 @@ jobs:
         run: python -m playwright install-deps chromium
 
       - name: Register parking
-        run: python parking.py
+        run: |
+          set -o pipefail
+          python parking.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # On failure (script crash or any per-plate failure), upload the
+      # Playwright trace so it can be opened with `playwright show-trace`.
+      # The trace is only written by parking.py when something went wrong,
+      # so on green runs there's nothing to upload.
+      - name: Upload Playwright trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-trace-${{ github.run_id }}-${{ github.run_attempt }}
+          path: trace.zip
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Notify Discord on failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -sS -H "Content-Type: application/json" \
+            --data '{"content":"Daily parking run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' \
+            "$DISCORD_WEBHOOK"

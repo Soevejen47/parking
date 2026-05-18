@@ -160,6 +160,9 @@ def submit_one(portal: Page, plate: str, receipt_email: str) -> str:
 
 # --- main flow ---------------------------------------------------------------
 
+TRACE_PATH = os.environ.get("TRACE_PATH", "trace.zip")
+
+
 def run_once(
     login_email: str,
     password: str,
@@ -176,6 +179,7 @@ def run_once(
         context = browser.new_context()
         context.set_default_timeout(DEFAULT_TIMEOUT_MS)
         page = context.new_page()
+        tracing_active = False
 
         try:
             page.goto(START_URL, wait_until="domcontentloaded")
@@ -186,7 +190,8 @@ def run_once(
             except PlaywrightTimeoutError:
                 pass
 
-            # Sign in.
+            # Sign in. Tracing is intentionally OFF here -- DOM snapshots
+            # would otherwise capture the email/password input values.
             page.get_by_role(
                 "link", name="Log ind eller tilmeld dig gratis"
             ).first.click()
@@ -195,6 +200,13 @@ def run_once(
             page.locator('input[type="password"]').fill(password)
             page.locator('button[type="submit"]:has-text("Log ind")').click()
             page.wait_for_url("**/dsb-plus/fri-parkering/**")
+
+            # Start tracing AFTER login -- credentials are no longer in the
+            # DOM. Trace is only persisted on failure (see except/finally).
+            context.tracing.start(
+                screenshots=True, snapshots=True, sources=False
+            )
+            tracing_active = True
 
             # Open the daily portal link in a new tab.
             permit_link = page.locator(f'a[href*="{PERMIT_HOST}"]').first
@@ -207,15 +219,30 @@ def run_once(
 
             # Submit each registration on the same portal page.
             results: list[tuple[str, str, str | None]] = []
+            any_failure = False
             for plate, receipt_email in registrations:
                 try:
                     message = submit_one(portal, plate, receipt_email)
                     results.append((plate, message, None))
                 except Exception as exc:
                     # Keep going -- one failure shouldn't block the rest.
+                    any_failure = True
                     results.append((plate, "", repr(exc)))
+
+            if any_failure:
+                context.tracing.stop(path=TRACE_PATH)
+            else:
+                context.tracing.stop()
+            tracing_active = False
             return results
 
+        except Exception:
+            if tracing_active:
+                try:
+                    context.tracing.stop(path=TRACE_PATH)
+                except Exception:
+                    pass
+            raise
         finally:
             context.close()
             browser.close()
