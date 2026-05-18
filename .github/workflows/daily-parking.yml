@@ -8,6 +8,10 @@ on:
   # Allow manual runs from the Actions tab for testing.
   workflow_dispatch:
 
+# Least privilege -- this workflow only reads the repo's code.
+permissions:
+  contents: read
+
 # If a previous run is still going (rare, but possible if a step hangs),
 # cancel it so we never have two concurrent registrations.
 concurrency:
@@ -40,8 +44,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Cache the Chromium binary across runs -- saves ~30s/run since the
+      # browser download is ~150MB. The cache key is keyed on requirements.txt
+      # so a Playwright version bump invalidates it automatically.
+      - name: Cache Playwright browser
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
       - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install --with-deps chromium
+
+      # System deps (apt packages) aren't cached -- run install-deps every
+      # time so the cached browser binary still has its libraries.
+      - name: Ensure Playwright system deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: python -m playwright install-deps chromium
 
       - name: Register parking
         run: python parking.py
