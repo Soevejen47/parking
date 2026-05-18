@@ -1,0 +1,57 @@
+name: Daily DSB parking
+
+on:
+  # 23:05 UTC = 00:05 in Copenhagen (CET, winter) / 01:05 (CEST, summer).
+  # Always just past midnight Denmark time, which is when a fresh DSB
+  # permit can be claimed for the new day.
+  schedule:
+    - cron: "5 23 * * *"
+  # Allow manual runs from the Actions tab for testing.
+  workflow_dispatch:
+
+# If a previous run is still going (rare, but possible if a step hangs),
+# cancel it so we never have two concurrent registrations.
+concurrency:
+  group: dsb-parking
+  cancel-in-progress: true
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      DSB_EMAIL: ${{ secrets.DSB_EMAIL }}
+      DSB_PASSWORD: ${{ secrets.DSB_PASSWORD }}
+      LICENSE_PLATE: ${{ vars.LICENSE_PLATE || 'CJ73789' }}
+      HEADLESS: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Register parking
+        run: python dsb_parking.py
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
