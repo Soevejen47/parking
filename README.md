@@ -1,5 +1,7 @@
 # parking
 
+[![Daily parking](https://github.com/Soevejen47/parking/actions/workflows/daily-parking.yml/badge.svg)](https://github.com/Soevejen47/parking/actions/workflows/daily-parking.yml)
+
 Small Python script that registers a license plate on a daily web form.
 It logs in to the operator's site, follows the day's one-time link, fills
 in the plate + email on the permit portal, and submits.
