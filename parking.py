@@ -1,22 +1,15 @@
 """
-DSB Plus daily free-parking registration.
+Daily parking registration.
 
-This script walks the same flow you would do by hand:
-  1. Open https://www.dsb.dk/dsb-plus/fri-parkering/
-  2. Accept the cookie banner if it appears.
-  3. Log in to DSB Plus using DSB_EMAIL and DSB_PASSWORD from the environment.
-  4. After login, click the daily "Tilmeld parkering ..." link.
-     That link opens ParkCare / ParkZone in a NEW tab. The exact URL is a
-     one-time token (it changes every day), so we never hardcode it -- we
-     just read its href off the page.
-  5. On the ParkCare page, fill in the license plate and email, then click
-     the "Opret" (Create) button.
-  6. Print the confirmation message that ParkCare shows.
+Logs in to the operator's website, follows the daily registration link
+(which opens a third-party permit portal in a new tab), fills in license
+plate + email, and submits the form. Prints the confirmation text.
 
-Selectors used in this script were verified against the live site, so they
-should be stable enough for everyday use. If DSB ever changes them, the
-script prints the error and exits non-zero so the GitHub Actions log
-makes it obvious.
+The daily link is a one-time token that changes every day -- the script
+reads its href off the page, so nothing needs to be hardcoded.
+
+If the upstream site ever changes its markup, the script prints the
+error to stderr and exits non-zero so the run log makes it obvious.
 
 See the README for install + run instructions.
 """
@@ -43,8 +36,10 @@ from playwright.sync_api import (
 
 # --- configuration -----------------------------------------------------------
 
-DSB_URL = "https://www.dsb.dk/dsb-plus/fri-parkering/"
+START_URL = "https://www.dsb.dk/dsb-plus/fri-parkering/"
+PERMIT_HOST = "parkcare.parkzone.dk"
 DEFAULT_PLATE = "CJ73789"
+SUCCESS_MARKER = "digital p-tilladelse"
 
 
 # --- helpers -----------------------------------------------------------------
@@ -54,7 +49,7 @@ def require_env(name: str) -> str:
     if not value:
         print(
             f"ERROR: environment variable {name} is empty.\n"
-            f"       Set it in a .env file or in your PowerShell session.",
+            f"       Set it in a .env file or in your shell session.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -73,21 +68,21 @@ def register_parking(email: str, password: str, plate: str, headless: bool) -> i
         page = context.new_page()
 
         try:
-            # 1) Open the DSB Plus parking page.
-            print(f"[*] Opening {DSB_URL}")
-            page.goto(DSB_URL, wait_until="domcontentloaded")
+            # 1) Open the start page.
+            print(f"[*] Opening start page")
+            page.goto(START_URL, wait_until="domcontentloaded")
 
             # 2) Accept the cookie banner if it shows up.
-            #    The banner is rendered by Cookie Information and uses the
-            #    CSS class .coi-banner__accept on its "Acceptér alle" button.
+            #    Rendered by Cookie Information; uses the CSS class
+            #    .coi-banner__accept on its "Acceptér alle" button.
             try:
                 page.locator("button.coi-banner__accept").first.click(timeout=5000)
                 print("[*] Cookie banner accepted.")
             except PlaywrightTimeoutError:
                 print("[*] No cookie banner shown -- continuing.")
 
-            # 3) Click the big "Log ind eller tilmeld dig gratis" CTA.
-            #    There are two on the page (hero + body); .first is fine.
+            # 3) Click the big login / signup CTA.
+            #    Two copies on the page (hero + body); .first is fine.
             page.get_by_role(
                 "link", name="Log ind eller tilmeld dig gratis"
             ).first.click()
@@ -97,51 +92,46 @@ def register_parking(email: str, password: str, plate: str, headless: bool) -> i
             page.locator('input[type="email"]').wait_for(state="visible", timeout=15_000)
             page.locator('input[type="email"]').fill(email)
             page.locator('input[type="password"]').fill(password)
-            # The submit button has type=submit and text "Log ind".
             page.locator('button[type="submit"]:has-text("Log ind")').click()
             print("[*] Login form submitted.")
 
-            # 5) After login, DSB redirects back to /dsb-plus/fri-parkering/
-            #    and the "Tilmeld parkering <date>" link becomes visible.
+            # 5) After login the site redirects back to the start page and
+            #    a daily registration link to the permit portal appears.
             page.wait_for_url("**/dsb-plus/fri-parkering/**", timeout=20_000)
-            tilmeld_link = page.locator('a[href*="parkcare.parkzone.dk"]').first
-            tilmeld_link.wait_for(state="visible", timeout=20_000)
-            print("[*] Logged in. Found 'Tilmeld parkering' link.")
+            permit_link = page.locator(f'a[href*="{PERMIT_HOST}"]').first
+            permit_link.wait_for(state="visible", timeout=20_000)
+            print("[*] Logged in. Found daily registration link.")
 
-            # 6) The Tilmeld link has target="_blank" -- it opens a new tab.
-            #    expect_page() captures that new tab cleanly.
+            # 6) The link has target="_blank" -- it opens a new tab.
             with context.expect_page(timeout=15_000) as new_page_info:
-                tilmeld_link.click()
-            parkcare = new_page_info.value
-            parkcare.wait_for_load_state("domcontentloaded")
-            print(f"[*] ParkCare opened: {parkcare.url}")
+                permit_link.click()
+            portal = new_page_info.value
+            portal.wait_for_load_state("domcontentloaded")
+            print("[*] Permit portal opened.")
 
-            # 7) Fill the ParkCare form.
-            #    #TBRegNo = license plate field (placeholder "Nummerplade")
+            # 7) Fill the portal form.
+            #    #TBRegNo = license plate field
             #    #Email   = email field
             #    #BCreate = "Opret" submit button
-            parkcare.locator("#TBRegNo").wait_for(state="visible", timeout=15_000)
-            parkcare.locator("#TBRegNo").fill(plate)
-            parkcare.locator("#Email").fill(email)
-            parkcare.locator("#BCreate").click()
-            print(f"[*] Submitted plate {plate} to ParkCare.")
+            portal.locator("#TBRegNo").wait_for(state="visible", timeout=15_000)
+            portal.locator("#TBRegNo").fill(plate)
+            portal.locator("#Email").fill(email)
+            portal.locator("#BCreate").click()
+            print(f"[*] Submitted plate {plate}.")
 
-            # 8) Wait for ParkCare's response message and print it.
-            #    The result text is rendered inside the span #LMessage.
-            message_locator = parkcare.locator("#LMessage")
+            # 8) Read and print the response message (span #LMessage).
+            message_locator = portal.locator("#LMessage")
             message_locator.wait_for(state="visible", timeout=15_000)
             message = message_locator.inner_text().strip()
 
+            ok = SUCCESS_MARKER in message.lower()
             print()
             print("=" * 72)
-            if "digital p-tilladelse" in message.lower():
-                print("SUCCESS")
-            else:
-                print("RESULT (unexpected wording -- please verify)")
+            print("SUCCESS" if ok else "RESULT (unexpected wording -- please verify)")
             print("=" * 72)
             print(message)
             print("=" * 72)
-            return 0 if "digital p-tilladelse" in message.lower() else 1
+            return 0 if ok else 1
 
         except Exception as exc:
             print(f"[!] Flow failed: {exc!r}", file=sys.stderr)
@@ -153,12 +143,12 @@ def register_parking(email: str, password: str, plate: str, headless: bool) -> i
 
 
 def main() -> int:
-    email = require_env("DSB_EMAIL")
-    password = require_env("DSB_PASSWORD")
+    email = require_env("LOGIN_EMAIL")
+    password = require_env("LOGIN_PASSWORD")
     plate = os.environ.get("LICENSE_PLATE", DEFAULT_PLATE).strip().upper()
     headless = os.environ.get("HEADLESS", "0") == "1"
 
-    print(f"[*] DSB_EMAIL      = {email}")
+    print(f"[*] LOGIN_EMAIL    = {email}")
     print(f"[*] LICENSE_PLATE  = {plate}")
     print(f"[*] HEADLESS       = {headless}")
 

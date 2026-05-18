@@ -1,9 +1,8 @@
-name: Daily DSB parking
+name: Daily parking
 
 on:
-  # 23:05 UTC = 00:05 in Copenhagen (CET, winter) / 01:05 (CEST, summer).
-  # Always just past midnight Denmark time, which is when a fresh DSB
-  # permit can be claimed for the new day.
+  # 23:05 UTC = 00:05 Copenhagen (winter) / 01:05 (summer).
+  # Always just past local midnight, when a new daily permit can be claimed.
   schedule:
     - cron: "5 23 * * *"
   # Allow manual runs from the Actions tab for testing.
@@ -12,7 +11,7 @@ on:
 # If a previous run is still going (rare, but possible if a step hangs),
 # cancel it so we never have two concurrent registrations.
 concurrency:
-  group: dsb-parking
+  group: parking
   cancel-in-progress: true
 
 jobs:
@@ -21,8 +20,8 @@ jobs:
     timeout-minutes: 5
 
     env:
-      DSB_EMAIL: ${{ secrets.DSB_EMAIL }}
-      DSB_PASSWORD: ${{ secrets.DSB_PASSWORD }}
+      LOGIN_EMAIL: ${{ secrets.LOGIN_EMAIL }}
+      LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
       LICENSE_PLATE: ${{ vars.LICENSE_PLATE || 'CJ73789' }}
       HEADLESS: "1"
 
@@ -45,4 +44,4 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Register parking
-        run: python dsb_parking.py
+        run: python parking.py
