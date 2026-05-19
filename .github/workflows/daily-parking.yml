@@ -1,28 +1,29 @@
 name: Daily parking
 
 on:
-  # Two crons to cover DST: 22:17 UTC = 00:17 Copenhagen in summer (CEST),
-  # 23:17 UTC = 00:17 Copenhagen in winter (CET). The "wrong" one runs an
-  # hour before midnight local time and either no-ops (portal still serves
-  # the previous day's permit -> "allerede registreret" path) or registers
-  # early; the script is idempotent either way, so a duplicate run is safe.
+  # GitHub Actions cron uses UTC, not Denmark time.
   #
-  # ":17" past the hour deliberately avoids the post-hour-boundary peak --
-  # GitHub Actions' scheduler de-prioritises cron jobs during high load
-  # near :00, and runs can be silently skipped. Mid-hour is much more
-  # reliable.
+  # Denmark summer time, CEST:
+  #   22:12 UTC = 00:12 Copenhagen
+  #
+  # Denmark winter time, CET:
+  #   23:12 UTC = 00:12 Copenhagen
+  #
+  # Multiple attempts are used because GitHub scheduled workflows can be
+  # delayed or sometimes skipped. The script is idempotent, so duplicate
+  # runs are okay if the car is already registered.
   schedule:
-    - cron: "17 22 * * *"
-    - cron: "17 23 * * *"
+    - cron: "12,27,42,57 22 * * *"
+    - cron: "12,27,42,57 23 * * *"
+    # Extra fallback: runs later in the night if GitHub missed the midnight window.
+    - cron: "12,42 0 * * *"
+
   # Allow manual runs from the Actions tab for testing.
   workflow_dispatch:
 
-# Least privilege -- this workflow only reads the repo's code.
 permissions:
   contents: read
 
-# If a previous run is still going (rare, but possible if a step hangs),
-# cancel it so we never have two concurrent registrations.
 concurrency:
   group: parking
   cancel-in-progress: true
@@ -30,7 +31,7 @@ concurrency:
 jobs:
   register:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     env:
       LOGIN_EMAIL: ${{ secrets.LOGIN_EMAIL }}
@@ -53,9 +54,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Cache the Chromium binary across runs -- saves ~30s/run since the
-      # browser download is ~150MB. The cache key is keyed on requirements.txt
-      # so a Playwright version bump invalidates it automatically.
       - name: Cache Playwright browser
         id: playwright-cache
         uses: actions/cache@v4
@@ -67,8 +65,6 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install --with-deps chromium
 
-      # System deps (apt packages) aren't cached -- run install-deps every
-      # time so the cached browser binary still has its libraries.
       - name: Ensure Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: python -m playwright install-deps chromium
@@ -78,10 +74,6 @@ jobs:
           set -o pipefail
           python parking.py | tee -a "$GITHUB_STEP_SUMMARY"
 
-      # On failure (script crash or any per-plate failure), upload the
-      # Playwright trace so it can be opened with `playwright show-trace`.
-      # The trace is only written by parking.py when something went wrong,
-      # so on green runs there's nothing to upload.
       - name: Upload Playwright trace
         if: failure()
         uses: actions/upload-artifact@v4
@@ -96,6 +88,11 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK is not set, skipping Discord notification."
+            exit 0
+          fi
+
           curl -sS -H "Content-Type: application/json" \
             --data '{"content":"Daily parking run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' \
             "$DISCORD_WEBHOOK"
