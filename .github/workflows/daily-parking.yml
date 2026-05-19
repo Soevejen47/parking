@@ -1,14 +1,19 @@
 name: Daily parking
 
 on:
-  # Two crons to cover DST: 22:05 UTC = 00:05 Copenhagen in summer (CEST),
-  # 23:05 UTC = 00:05 Copenhagen in winter (CET). The "wrong" one runs an
+  # Two crons to cover DST: 22:17 UTC = 00:17 Copenhagen in summer (CEST),
+  # 23:17 UTC = 00:17 Copenhagen in winter (CET). The "wrong" one runs an
   # hour before midnight local time and either no-ops (portal still serves
   # the previous day's permit -> "allerede registreret" path) or registers
   # early; the script is idempotent either way, so a duplicate run is safe.
+  #
+  # ":17" past the hour deliberately avoids the post-hour-boundary peak --
+  # GitHub Actions' scheduler de-prioritises cron jobs during high load
+  # near :00, and runs can be silently skipped. Mid-hour is much more
+  # reliable.
   schedule:
-    - cron: "5 22 * * *"
-    - cron: "5 23 * * *"
+    - cron: "17 22 * * *"
+    - cron: "17 23 * * *"
   # Allow manual runs from the Actions tab for testing.
   workflow_dispatch:
 
