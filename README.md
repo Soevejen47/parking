@@ -82,10 +82,21 @@ CD67890:bob@example.com
 
 ## Scheduling on GitHub Actions
 
-The permit only covers the day you register it. The workflow at
+The permit only covers the day you register it, so the workflow at
 [.github/workflows/daily-parking.yml](.github/workflows/daily-parking.yml)
-runs daily at **23:05 UTC** (= 00:05 Copenhagen winter, 01:05 summer) so
-it always fires just past local midnight.
+fires just past local midnight. GitHub cron is UTC; the triggers are
+chosen to land after midnight in both Danish winter and summer:
+
+| Trigger (UTC) | Copenhagen winter | Copenhagen summer | Role     |
+| ------------- | ----------------- | ----------------- | -------- |
+| `23:12`       | `00:12`           | `01:12`           | primary  |
+| `23:42`       | `00:42`           | `01:42`           | fallback |
+| `00:27`       | `01:27`           | `02:27`           | fallback |
+
+GitHub can delay or skip scheduled triggers, so the two fallbacks act as
+a safety net. A `check` job guards every run: once any run has succeeded
+that night, the remaining triggers detect it and skip the work, so the
+car is registered at most once per night.
 
 Add these in **Settings -> Secrets and variables -> Actions -> Secrets**:
 

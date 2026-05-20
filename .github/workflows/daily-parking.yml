@@ -1,35 +1,91 @@
 name: Daily parking
 
 on:
-  # GitHub Actions cron uses UTC, not Denmark time.
+  # GitHub Actions cron is always UTC. These times are chosen so every
+  # trigger lands AFTER local midnight in both Danish winter and summer:
   #
-  # Denmark summer time, CEST:
-  #   22:12 UTC = 00:12 Copenhagen
+  #   winter, CET  (UTC+1):  23:12 UTC = 00:12,  00:27 UTC = 01:27
+  #   summer, CEST (UTC+2):  23:12 UTC = 01:12,  00:27 UTC = 02:27
   #
-  # Denmark winter time, CET:
-  #   23:12 UTC = 00:12 Copenhagen
+  # The permit only covers the day it is registered, so a pre-midnight
+  # run would register the wrong day -- hence nothing before 23:00 UTC.
   #
-  # Multiple attempts are used because GitHub scheduled workflows can be
-  # delayed or sometimes skipped. The script is idempotent, so duplicate
-  # runs are okay if the car is already registered.
+  # The first trigger does the work. The two later triggers are a safety
+  # net for when GitHub delays or skips a scheduled run; the `check` job
+  # below turns them into no-ops once any run has already succeeded.
   schedule:
-    - cron: "12,27,42,57 22 * * *"
-    - cron: "12,27,42,57 23 * * *"
-    # Extra fallback: runs later in the night if GitHub missed the midnight window.
-    - cron: "12,42 0 * * *"
+    - cron: "12 23 * * *"   # primary
+    - cron: "42 23 * * *"   # fallback 1 (+30 min)
+    - cron: "27 0 * * *"    # fallback 2 (late-night safety net)
 
   # Allow manual runs from the Actions tab for testing.
   workflow_dispatch:
 
 permissions:
   contents: read
+  # `check` needs to read this workflow's previous run history.
+  actions: read
 
 concurrency:
   group: parking
-  cancel-in-progress: true
+  # Queue a delayed trigger behind an in-progress run instead of
+  # cancelling it -- this lets the `check` job see the finished run's
+  # conclusion and skip the redundant work.
+  cancel-in-progress: false
 
 jobs:
+  # Decide whether registration still needs to run tonight. If an earlier
+  # scheduled run already succeeded, the later fallback triggers skip.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.guard.outputs.proceed }}
+    steps:
+      - name: Skip if a run already succeeded tonight
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+
+          # Manual runs are always for testing -- never skip them.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run -- proceeding."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A 6h look-back covers the whole night's cluster of triggers
+          # (23:12-00:27 UTC) plus any GitHub scheduling delay, while
+          # staying well clear of the previous night ~24h earlier.
+          since=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+
+          succeeded=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow daily-parking.yml \
+            --event schedule \
+            --status success \
+            --limit 20 \
+            --json createdAt \
+            --jq "[.[] | select(.createdAt >= \"$since\")] | length" 2>/dev/null) \
+            || succeeded=""
+
+          if [ -z "$succeeded" ]; then
+            # Fail open: if the API query fails, run rather than risk a
+            # missed registration.
+            echo "Could not query previous runs -- proceeding to be safe."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          elif [ "$succeeded" -gt 0 ]; then
+            echo "A scheduled run already succeeded in the last 6h -- skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No recent successful run -- proceeding."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   register:
+    needs: check
+    if: needs.check.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
