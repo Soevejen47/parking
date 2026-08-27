@@ -4,6 +4,7 @@
 
 Small Python automation that registers one or more license plates on a
 daily web form. Runs unattended via GitHub Actions every morning.
+test
 
 ## How it works
 
