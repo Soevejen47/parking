@@ -1,4 +1,4 @@
-# parking
+# parking test
 
 [![Daily parking](https://github.com/Soevejen47/parking/actions/workflows/daily-parking.yml/badge.svg)](https://github.com/Soevejen47/parking/actions/workflows/daily-parking.yml)
 
