@@ -132,10 +132,11 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          if [ -z "$DISCORD_WEBHOOK" ]; then
-            echo "DISCORD_WEBHOOK is not set, skipping Discord notification."
-            exit 0
-          fi
+          # Also skips placeholder values (e.g. "-") that would break curl.
+          case "$DISCORD_WEBHOOK" in
+            https://*) ;;
+            *) echo "DISCORD_WEBHOOK is not a URL, skipping Discord notification."; exit 0 ;;
+          esac
 
           curl -sS -H "Content-Type: application/json" \
             --data '{"content":"Daily parking run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' \

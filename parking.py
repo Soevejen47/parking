@@ -34,7 +34,8 @@ from playwright.sync_api import (
 
 # --- configuration -----------------------------------------------------------
 
-START_URL = "https://www.dsb.dk/dsb-plus/fri-parkering/"
+LOGIN_URL = "https://www.dsb.dk/auth/log-ind?redirectTo=%2Fprofil%2Fbil-parkering"
+PARKING_URL = "https://www.dsb.dk/profil/bil-parkering"
 PERMIT_HOST = "parkcare.parkzone.dk"
 
 # Lowercase substrings -- if any are present in the portal's response, treat
@@ -182,7 +183,7 @@ def run_once(
         tracing_active = False
 
         try:
-            page.goto(START_URL, wait_until="domcontentloaded")
+            page.goto(LOGIN_URL, wait_until="domcontentloaded")
 
             # Cookie banner -- only appears on first visit per context.
             try:
@@ -192,14 +193,10 @@ def run_once(
 
             # Sign in. Tracing is intentionally OFF here -- DOM snapshots
             # would otherwise capture the email/password input values.
-            page.get_by_role(
-                "link", name="Log ind eller tilmeld dig gratis"
-            ).first.click()
-            page.wait_for_url("**/auth/log-ind**")
             page.locator('input[type="email"]').fill(login_email)
             page.locator('input[type="password"]').fill(password)
             page.locator('button[type="submit"]:has-text("Log ind")').click()
-            page.wait_for_url("**/dsb-plus/fri-parkering/**")
+            page.wait_for_url(lambda url: "/auth/log-ind" not in url)
 
             # Start tracing AFTER login -- credentials are no longer in the
             # DOM. Trace is only persisted on failure (see except/finally).
@@ -208,13 +205,14 @@ def run_once(
             )
             tracing_active = True
 
-            # Open the daily portal link in a new tab.
+            # Don't rely on redirectTo -- always open the parking page.
+            page.goto(PARKING_URL, wait_until="domcontentloaded")
+
+            # Open the daily portal link by its href (no new-tab dependency).
             permit_link = page.locator(f'a[href*="{PERMIT_HOST}"]').first
-            permit_link.wait_for(state="visible")
-            with context.expect_page() as popup_info:
-                permit_link.click()
-            portal = popup_info.value
-            portal.wait_for_load_state("domcontentloaded")
+            permit_link.wait_for(state="attached")
+            portal = context.new_page()
+            portal.goto(permit_link.get_attribute("href"), wait_until="domcontentloaded")
             portal.locator("#TBRegNo").wait_for(state="visible")
 
             # Submit each registration on the same portal page.
